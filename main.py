@@ -1,6 +1,3 @@
-Got it. Here’s your **full code cleaned up**, with the fixes applied: `!commands` is removed, and the default `!help` now uses your `EmbedHelpCommand` embed. Everything else stays exactly as in your original logic.
-
-````python
 import discord
 from discord.ext import commands
 from discord.ui import View, Button, Select, Modal, TextInput
