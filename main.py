@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
-from discord.ui import View, Button, Select, Modal, TextInput
-import asyncio
+from discord.ui import View, Select, Modal, TextInput
 import os
 from dotenv import load_dotenv
 from database import DatabaseManager
@@ -42,46 +41,36 @@ CUSTOM_COMMANDS = {
 }
 
 # =========================
-# ---- HELP COMMAND ----
+# ---- SINGLE EMBED HELP ----
 # =========================
-class EmbedHelpCommand(commands.MinimalHelpCommand):
-    async def send_bot_help(self, mapping):
-        embed = discord.Embed(
-            title="🛠️ Bot Commands Overview",
-            description="Here’s all the commands you can use! Click a button for more info.",
-            color=discord.Color.blurple()
-        )
-        for cog, commands_list in mapping.items():
-            if commands_list:
-                name = getattr(cog, "qualified_name", "No Category")
-                value = "\n".join(f"**!{cmd.name}** — {cmd.help or 'No description'}" for cmd in commands_list)
-                embed.add_field(name=name, value=value, inline=False)
-        embed.set_footer(text="Need more help? Contact a server admin!")
-        await self.get_destination().send(embed=embed)
+@bot.command(name="help", help="Shows this message")
+async def help_command(ctx):
+    embed = discord.Embed(
+        title="🛠️ Bot Commands Overview",
+        description="Here’s all the commands you can use on this server:",
+        color=discord.Color.blurple()
+    )
 
-    async def send_cog_help(self, cog):
-        embed = discord.Embed(
-            title=f"⚡ {cog.qualified_name} Commands",
-            color=discord.Color.blurple()
-        )
-        for cmd in cog.get_commands():
-            embed.add_field(name=f"!{cmd.name}", value=cmd.help or "No description", inline=False)
-        await self.get_destination().send(embed=embed)
+    # Collect all commands and their help text
+    for command in bot.commands:
+        desc = command.help or "No description"
+        embed.add_field(name=f"!{command.name}", value=desc, inline=False)
 
-bot.help_command = EmbedHelpCommand()
+    embed.set_footer(text="Need more help? Contact a server admin!")
+    await ctx.send(embed=embed)
 
 # =========================
 # ---- LEADERBOARD ----
 # =========================
 @bot.command(name="leaderboard", help="Show the top helpers with points")
 async def leaderboard(ctx):
-    data = await db.get_leaderboard(ctx.guild.id)  # return list of tuples [(user_id, points)]
+    data = await db.get_leaderboard(ctx.guild.id)  # return list [(user_id, points)]
     if not data:
         return await ctx.send("No leaderboard data yet!")
 
     embed = discord.Embed(
         title="🏆 Top Helpers Leaderboard",
-        description="The highest ranking helpers in this server!",
+        description="Highest ranking helpers on this server!",
         color=discord.Color.gold()
     )
     medals = ["🥇", "🥈", "🥉"]
@@ -204,7 +193,7 @@ class ChannelModal(Modal):
             await interaction.response.send_message("❌ Not found.", ephemeral=True)
             return
         await db.update_server_config(self.guild.id, **{self.key: ch.id})
-        await interaction.response.send_message(f"✅ Set to {ch.mention}.", ephemeral=True)
+        await interaction.response.send_message(f"✅ Set to {ch.mention}", ephemeral=True)
 
 # =========================
 # ---- PANEL + TICKETS ----
@@ -229,19 +218,19 @@ async def panel(ctx):
         "4. Get help in your private ticket!\n"
     )
     embed = discord.Embed(title="🎟️ Ticket Panel", description=desc, color=discord.Color.blurple())
-    options = [discord.SelectOption(label=k, value=k, description=f"{pts[k]} pts | {slots.get(k, DEFAULT_SLOTS)} helpers") for k in pts]
-
+    options = [
+        discord.SelectOption(label=k, value=k, description=f"{pts[k]} pts | {slots.get(k, DEFAULT_SLOTS)} helpers")
+        for k in pts
+    ]
     class TicketSelect(Select):
         def __init__(self):
             super().__init__(placeholder="Choose service", min_values=1, max_values=1, options=options)
         async def callback(self, interaction):
             await interaction.response.send_modal(TicketModal(self.values[0], interaction.guild, interaction.user))
-
     view = View()
     view.add_item(TicketSelect())
     await ctx.send(embed=embed, view=view)
 
-# ---- Ticket Modal ----
 class TicketModal(Modal):
     def __init__(self, ticket_type, guild, requester):
         super().__init__(title=f"{ticket_type} Ticket")
@@ -258,26 +247,19 @@ class TicketModal(Modal):
             self.guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True)
         }
-        for role_key in ['helper_role_id', 'staff_role_id', 'admin_role_id']:
-            role_id = cfg.get(role_key)
-            if role_id:
-                role = self.guild.get_role(role_id)
-                if role:
-                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        for key in ["helper_role_id", "staff_role_id", "admin_role_id"]:
+            if cfg.get(key):
+                r = self.guild.get_role(cfg[key])
+                if r:
+                    overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
         pts = await db.get_point_values(self.guild.id) or DEFAULT_POINT_VALUES
         slots = await db.get_helper_slots(self.guild.id) or DEFAULT_HELPER_SLOTS
         slot_count = slots.get(self.ticket_type, DEFAULT_SLOTS)
-
-        try:
-            channel = await self.guild.create_text_channel(
-                name=f"{self.ticket_type.lower().replace(' ', '-')}-{interaction.user.name}",
-                category=cat,
-                overwrites=overwrites
-            )
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Could not create ticket: {e}", ephemeral=True)
-            return
-
+        channel = await self.guild.create_text_channel(
+            name=f"{self.ticket_type.lower().replace(' ', '-')}-{interaction.user.name}",
+            category=cat,
+            overwrites=overwrites
+        )
         embed = discord.Embed(title=f"🆕 {self.ticket_type} Ticket", color=discord.Color.green())
         embed.add_field(name="Requester", value=interaction.user.mention, inline=True)
         for i, inp in enumerate(self.children):
@@ -285,10 +267,9 @@ class TicketModal(Modal):
         embed.add_field(name="Helpers", value="\n".join([f"{i+1}. [Empty]" for i in range(slot_count)]), inline=False)
         embed.add_field(name="Reward", value=f"{pts[self.ticket_type]} points per helper", inline=False)
         embed.set_footer(text="Only staff/admin can close this ticket. Helpers: use the button below to join!")
-        await channel.send(embed=embed)
+        view = discord.ui.View()  # Add join buttons etc. here
+        await channel.send(embed=embed, view=view)
         await interaction.response.send_message(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
-# =========================
-# ---- RUN BOT ----
-# =========================
+# ---- RUN ----
 bot.run(TOKEN)
