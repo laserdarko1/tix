@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 from database import DatabaseManager
 from flask import Flask
+from threading import Thread
 
 # ---- Bot Setup ----
 load_dotenv()
@@ -47,7 +48,7 @@ async def help_command(ctx):
         color=discord.Color.blurple()
     )
 
-    # Categorize commands manually if needed
+    # Categorize commands manually
     categories = {
         "🎟️ Tickets": ["panel", "setup"],
         "🏆 Utility": ["leaderboard", "help"]
@@ -211,5 +212,19 @@ class ChannelModal(Modal):
         await db.update_server_config(self.guild.id, **{self.key: ch.id})
         await interaction.response.send_message(f"✅ Set to {ch.mention}", ephemeral=True)
 
-# ---- RUN ----
+# ---- KEEP-ALIVE / WEB SERVER FOR RENDER ----
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot is running!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+t = Thread(target=run)
+t.start()
+
+# ---- RUN DISCORD BOT ----
 bot.run(TOKEN)
