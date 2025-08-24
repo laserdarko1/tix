@@ -11,7 +11,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-bot.remove_command("help")  # Remove any default help
+bot.remove_command("help")  # remove default help
 
 # ---- Database ----
 db = DatabaseManager()
@@ -36,28 +36,44 @@ TICKET_QUESTIONS = [
     ("Anything else?", False)
 ]
 
-# =========================
-# ---- HELP COMMAND ----
-# =========================
+# -------------------------
+# ---- CUSTOM HELP ----
+# -------------------------
 @bot.command(name="help", help="Shows all bot commands")
 async def help_command(ctx):
     embed = discord.Embed(
         title="🛠️ Bot Commands Overview",
-        description="All commands available on this server:",
+        description="Here’s all the commands you can use! Use them wisely 😉",
         color=discord.Color.blurple()
     )
 
-    # Collect all commands with their short help
-    for command in bot.commands:
-        desc = command.help or "No description"
-        embed.add_field(name=f"!{command.name}", value=desc, inline=False)
+    # Categorize commands manually if needed
+    categories = {
+        "🎟️ Tickets": ["panel", "setup"],
+        "🏆 Utility": ["leaderboard", "help"]
+    }
+
+    emoji = {
+        "panel": "🎫",
+        "setup": "⚙️",
+        "leaderboard": "🏅",
+        "help": "❓"
+    }
+
+    for category, cmds in categories.items():
+        value = ""
+        for cmd_name in cmds:
+            cmd = bot.get_command(cmd_name)
+            if cmd:
+                value += f"{emoji.get(cmd_name,'')} `!{cmd.name}` — {cmd.help or 'No description'}\n"
+        embed.add_field(name=category, value=value, inline=False)
 
     embed.set_footer(text="Need more help? Contact a server admin!")
     await ctx.send(embed=embed)
 
-# =========================
+# -------------------------
 # ---- LEADERBOARD ----
-# =========================
+# -------------------------
 @bot.command(name="leaderboard", help="Show the top helpers with points")
 async def leaderboard(ctx):
     data = await db.get_leaderboard(ctx.guild.id)  # list of (user_id, points)
@@ -71,19 +87,21 @@ async def leaderboard(ctx):
     )
 
     medals = ["🥇", "🥈", "🥉"]
+    lines = []
     for i, (user_id, points) in enumerate(data[:10]):
         member = ctx.guild.get_member(user_id)
         if not member:
             continue
         medal = medals[i] if i < 3 else f"{i+1}."
-        embed.add_field(name=f"{medal} {member.display_name}", value=f"Points: **{points}**", inline=False)
+        lines.append(f"{medal} {member.mention} — **{points} pts**")
 
+    embed.description = "\n".join(lines)
     embed.set_footer(text="Keep helping to climb the leaderboard! 💪")
     await ctx.send(embed=embed)
 
-# =========================
+# -------------------------
 # ---- PERMISSIONS ----
-# =========================
+# -------------------------
 async def get_config(guild):
     return await db.get_server_config(guild.id) or {}
 
@@ -98,17 +116,17 @@ async def is_staff(member):
     cfg = await get_config(member.guild)
     return has_role(member, cfg.get('staff_role_id')) or await is_admin(member)
 
-# =========================
+# -------------------------
 # ---- EVENTS ----
-# =========================
+# -------------------------
 @bot.event
 async def on_ready():
     await db.initialize_database()
     print(f"✅ {bot.user} online!")
 
-# =========================
+# -------------------------
 # ---- SETUP COMMAND ----
-# =========================
+# -------------------------
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup(ctx):
@@ -193,7 +211,5 @@ class ChannelModal(Modal):
         await db.update_server_config(self.guild.id, **{self.key: ch.id})
         await interaction.response.send_message(f"✅ Set to {ch.mention}", ephemeral=True)
 
-# =========================
 # ---- RUN ----
-# =========================
 bot.run(TOKEN)
