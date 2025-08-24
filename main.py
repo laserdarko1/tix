@@ -10,7 +10,8 @@ from flask import Flask
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+bot.remove_command("help")  # Remove any default help
 
 # ---- Database ----
 db = DatabaseManager()
@@ -34,24 +35,19 @@ TICKET_QUESTIONS = [
     ("Room number?", True),
     ("Anything else?", False)
 ]
-CUSTOM_COMMANDS = {
-    "proof": {"title": "📸 Proof", "desc": "Proof requirements"},
-    "hrules": {"title": "📋 Helper Rules", "desc": "Helper guidelines"},
-    "rrules": {"title": "📜 Runner Rules", "desc": "Runner guidelines"}
-}
 
 # =========================
-# ---- SINGLE EMBED HELP ----
+# ---- HELP COMMAND ----
 # =========================
-@bot.command(name="help", help="Shows this message")
+@bot.command(name="help", help="Shows all bot commands")
 async def help_command(ctx):
     embed = discord.Embed(
         title="🛠️ Bot Commands Overview",
-        description="Here’s all the commands you can use on this server:",
+        description="All commands available on this server:",
         color=discord.Color.blurple()
     )
 
-    # Collect all commands and their help text
+    # Collect all commands with their short help
     for command in bot.commands:
         desc = command.help or "No description"
         embed.add_field(name=f"!{command.name}", value=desc, inline=False)
@@ -64,7 +60,7 @@ async def help_command(ctx):
 # =========================
 @bot.command(name="leaderboard", help="Show the top helpers with points")
 async def leaderboard(ctx):
-    data = await db.get_leaderboard(ctx.guild.id)  # return list [(user_id, points)]
+    data = await db.get_leaderboard(ctx.guild.id)  # list of (user_id, points)
     if not data:
         return await ctx.send("No leaderboard data yet!")
 
@@ -73,6 +69,7 @@ async def leaderboard(ctx):
         description="Highest ranking helpers on this server!",
         color=discord.Color.gold()
     )
+
     medals = ["🥇", "🥈", "🥉"]
     for i, (user_id, points) in enumerate(data[:10]):
         member = ctx.guild.get_member(user_id)
@@ -80,6 +77,7 @@ async def leaderboard(ctx):
             continue
         medal = medals[i] if i < 3 else f"{i+1}."
         embed.add_field(name=f"{medal} {member.display_name}", value=f"Points: **{points}**", inline=False)
+
     embed.set_footer(text="Keep helping to climb the leaderboard! 💪")
     await ctx.send(embed=embed)
 
@@ -196,80 +194,6 @@ class ChannelModal(Modal):
         await interaction.response.send_message(f"✅ Set to {ch.mention}", ephemeral=True)
 
 # =========================
-# ---- PANEL + TICKETS ----
-# =========================
-@bot.command()
-async def panel(ctx):
-    if not await is_staff(ctx.author):
-        return await ctx.send("❌ Only staff or admin can create a panel.")
-    cfg = await get_config(ctx.guild)
-    pts = await db.get_point_values(ctx.guild.id) or DEFAULT_POINT_VALUES
-    slots = await db.get_helper_slots(ctx.guild.id) or DEFAULT_HELPER_SLOTS
-    desc = (
-        "### 🎮 In-game Assistance\n"
-        "Select a service below to create a help ticket. Our helpers will assist you!\n\n"
-        "### 📜 Guidelines & Rules: Use `!hrules`, `!rrules`, and `!proof` commands\n"
-        "📋 **Available Services**\n"
-        + "\n".join(f"- **{k}** — **{v} points**" for k, v in pts.items()) +
-        "\n\n### ℹ️ How it works\n"
-        "1. Select a service\n"
-        "2. Fill out the form\n"
-        "3. Wait for helpers to join\n"
-        "4. Get help in your private ticket!\n"
-    )
-    embed = discord.Embed(title="🎟️ Ticket Panel", description=desc, color=discord.Color.blurple())
-    options = [
-        discord.SelectOption(label=k, value=k, description=f"{pts[k]} pts | {slots.get(k, DEFAULT_SLOTS)} helpers")
-        for k in pts
-    ]
-    class TicketSelect(Select):
-        def __init__(self):
-            super().__init__(placeholder="Choose service", min_values=1, max_values=1, options=options)
-        async def callback(self, interaction):
-            await interaction.response.send_modal(TicketModal(self.values[0], interaction.guild, interaction.user))
-    view = View()
-    view.add_item(TicketSelect())
-    await ctx.send(embed=embed, view=view)
-
-class TicketModal(Modal):
-    def __init__(self, ticket_type, guild, requester):
-        super().__init__(title=f"{ticket_type} Ticket")
-        self.ticket_type = ticket_type
-        self.guild = guild
-        self.requester = requester
-        for q, req in TICKET_QUESTIONS:
-            self.add_item(TextInput(label=q, required=req))
-
-    async def on_submit(self, interaction):
-        cfg = await get_config(self.guild)
-        cat = self.guild.get_channel(cfg.get('ticket_category_id'))
-        overwrites = {
-            self.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        }
-        for key in ["helper_role_id", "staff_role_id", "admin_role_id"]:
-            if cfg.get(key):
-                r = self.guild.get_role(cfg[key])
-                if r:
-                    overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        pts = await db.get_point_values(self.guild.id) or DEFAULT_POINT_VALUES
-        slots = await db.get_helper_slots(self.guild.id) or DEFAULT_HELPER_SLOTS
-        slot_count = slots.get(self.ticket_type, DEFAULT_SLOTS)
-        channel = await self.guild.create_text_channel(
-            name=f"{self.ticket_type.lower().replace(' ', '-')}-{interaction.user.name}",
-            category=cat,
-            overwrites=overwrites
-        )
-        embed = discord.Embed(title=f"🆕 {self.ticket_type} Ticket", color=discord.Color.green())
-        embed.add_field(name="Requester", value=interaction.user.mention, inline=True)
-        for i, inp in enumerate(self.children):
-            embed.add_field(name=TICKET_QUESTIONS[i][0], value=inp.value or "None", inline=False)
-        embed.add_field(name="Helpers", value="\n".join([f"{i+1}. [Empty]" for i in range(slot_count)]), inline=False)
-        embed.add_field(name="Reward", value=f"{pts[self.ticket_type]} points per helper", inline=False)
-        embed.set_footer(text="Only staff/admin can close this ticket. Helpers: use the button below to join!")
-        view = discord.ui.View()  # Add join buttons etc. here
-        await channel.send(embed=embed, view=view)
-        await interaction.response.send_message(f"✅ Ticket created: {channel.mention}", ephemeral=True)
-
 # ---- RUN ----
+# =========================
 bot.run(TOKEN)
