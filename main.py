@@ -299,7 +299,7 @@ class TicketModal(Modal):
         embed.set_footer(text="Only staff/admin can close this ticket. Helpers: use the button below to join!")
         view = TicketView(interaction.user, self.ticket_type, slot_count, pts[self.ticket_type], db)
         msg = await channel.send(embed=embed, view=view)
-        await channel.purge(limit=1)
+        await channel.purge(limit=1)  # Remove bot-created initial channel message
         await channel.send(f"{interaction.user.mention} Your ticket is ready! Helpers will join soon.")
         await interaction.response.send_message(
             f"✅ Ticket created: {channel.mention}", ephemeral=True
@@ -344,6 +344,7 @@ class TicketView(View):
     async def close_btn(self, interaction, btn):
         if not await is_staff(interaction.user):
             return await interaction.response.send_message("❌ Only staff or admin can close this ticket.", ephemeral=True)
+        # transcript
         messages = []
         async for m in interaction.channel.history(limit=None, oldest_first=True):
             messages.append(f"[{m.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {m.author}: {m.content}")
@@ -357,6 +358,7 @@ class TicketView(View):
                 import io
                 f = discord.File(fp=io.BytesIO(transcript.encode()), filename=f"transcript-{interaction.channel.name}.txt")
                 await logch.send(f"📄 **Transcript for {interaction.channel.name}**", file=f)
+        # award points
         for h in self.helpers:
             await db.add_user_points(interaction.guild.id, h.id, self.reward)
         await interaction.response.send_message("🔒 Ticket will be closed & deleted in 5s.")
@@ -379,6 +381,7 @@ class TicketView(View):
 # ---- Points & Leaderboard ----
 @bot.command()
 async def leaderboard(ctx, page: int = 1):
+    """Show leaderboard (10 per page)."""
     pts = await db.get_all_user_points(ctx.guild.id)
     users = sorted(pts.items(), key=lambda x: x[1], reverse=True)
     start = (page - 1) * 10
@@ -393,6 +396,10 @@ async def leaderboard(ctx, page: int = 1):
     else:
         for idx, (uid, score) in enumerate(users[start:end], start=start+1):
             member = ctx.guild.get_member(uid)
-            name = member.mention if member else f"User `{uid}`"
-            embed.add_field(name=f"{idx}. {name}", value=f"Points: **{score}**",
-````
+            name = member.name if member else f"User ID {uid}"
+            embed.add_field(name=f"{idx}. {name}", value=f"Points: **{score}**", inline=False)
+    embed.set_footer(text=f"Page {page}")
+    await ctx.send(embed=embed)
+
+# ---- Run Bot ----
+bot.run(TOKEN)
