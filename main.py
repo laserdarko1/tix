@@ -12,7 +12,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-bot.remove_command("help")  # remove default help
+bot.remove_command("help")  # remove default help completely
 
 # ---- Database ----
 db = DatabaseManager()
@@ -44,30 +44,23 @@ TICKET_QUESTIONS = [
 async def help_command(ctx):
     embed = discord.Embed(
         title="🛠️ Bot Commands Overview",
-        description="Here’s all the commands you can use! Use them wisely 😉",
+        description="All commands available on this server:",
         color=discord.Color.blurple()
     )
 
-    # Categorize commands manually
-    categories = {
-        "🎟️ Tickets": ["panel", "setup"],
-        "🏆 Utility": ["leaderboard", "help"]
-    }
-
-    emoji = {
+    # Add all commands with description and emoji
+    command_emojis = {
         "panel": "🎫",
         "setup": "⚙️",
-        "leaderboard": "🏅",
+        "leaderboard": "🏆",
         "help": "❓"
     }
 
-    for category, cmds in categories.items():
-        value = ""
-        for cmd_name in cmds:
-            cmd = bot.get_command(cmd_name)
-            if cmd:
-                value += f"{emoji.get(cmd_name,'')} `!{cmd.name}` — {cmd.help or 'No description'}\n"
-        embed.add_field(name=category, value=value, inline=False)
+    for cmd in bot.commands:
+        if cmd.hidden:
+            continue
+        emoji = command_emojis.get(cmd.name, "")
+        embed.add_field(name=f"{emoji} !{cmd.name}", value=cmd.help or "No description", inline=False)
 
     embed.set_footer(text="Need more help? Contact a server admin!")
     await ctx.send(embed=embed)
@@ -93,8 +86,11 @@ async def leaderboard(ctx):
         member = ctx.guild.get_member(user_id)
         if not member:
             continue
+        # align username
+        name = member.display_name
+        name = (name[:15] + '..') if len(name) > 15 else name.ljust(15)
         medal = medals[i] if i < 3 else f"{i+1}."
-        lines.append(f"{medal} {member.mention} — **{points} pts**")
+        lines.append(f"{medal} {name} {points} pts")
 
     embed.description = "\n".join(lines)
     embed.set_footer(text="Keep helping to climb the leaderboard! 💪")
@@ -223,8 +219,7 @@ def run():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-t = Thread(target=run)
-t.start()
+Thread(target=run).start()
 
 # ---- RUN DISCORD BOT ----
 bot.run(TOKEN)
