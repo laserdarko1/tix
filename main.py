@@ -11,25 +11,7 @@ from flask import Flask
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 intents = discord.Intents.all()
-
-# ---- Custom Embed Help ----
-from discord.ext.commands import DefaultHelpCommand
-
-class EmbedHelpCommand(DefaultHelpCommand):
-    def get_ending_note(self):
-        return "Need more help? Contact an admin!"
-
-    async def send_pages(self):
-        destination = self.get_destination()
-        for page in self.paginator.pages:
-            embed = discord.Embed(description=page, color=discord.Color.blurple())
-            await destination.send(embed=embed)
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents,
-    help_command=EmbedHelpCommand()
-)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ---- Database ----
 db = DatabaseManager()
@@ -59,7 +41,62 @@ CUSTOM_COMMANDS = {
     "rrules": {"title": "📜 Runner Rules", "desc": "Runner guidelines"}
 }
 
-# ---- Permission Checks ----
+# =========================
+# ---- HELP COMMAND ----
+# =========================
+class EmbedHelpCommand(commands.MinimalHelpCommand):
+    async def send_bot_help(self, mapping):
+        embed = discord.Embed(
+            title="🛠️ Bot Commands Overview",
+            description="Here’s all the commands you can use! Click a button for more info.",
+            color=discord.Color.blurple()
+        )
+        for cog, commands_list in mapping.items():
+            if commands_list:
+                name = getattr(cog, "qualified_name", "No Category")
+                value = "\n".join(f"**!{cmd.name}** — {cmd.help or 'No description'}" for cmd in commands_list)
+                embed.add_field(name=name, value=value, inline=False)
+        embed.set_footer(text="Need more help? Contact a server admin!")
+        await self.get_destination().send(embed=embed)
+
+    async def send_cog_help(self, cog):
+        embed = discord.Embed(
+            title=f"⚡ {cog.qualified_name} Commands",
+            color=discord.Color.blurple()
+        )
+        for cmd in cog.get_commands():
+            embed.add_field(name=f"!{cmd.name}", value=cmd.help or "No description", inline=False)
+        await self.get_destination().send(embed=embed)
+
+bot.help_command = EmbedHelpCommand()
+
+# =========================
+# ---- LEADERBOARD ----
+# =========================
+@bot.command(name="leaderboard", help="Show the top helpers with points")
+async def leaderboard(ctx):
+    data = await db.get_leaderboard(ctx.guild.id)  # return list of tuples [(user_id, points)]
+    if not data:
+        return await ctx.send("No leaderboard data yet!")
+
+    embed = discord.Embed(
+        title="🏆 Top Helpers Leaderboard",
+        description="The highest ranking helpers in this server!",
+        color=discord.Color.gold()
+    )
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (user_id, points) in enumerate(data[:10]):
+        member = ctx.guild.get_member(user_id)
+        if not member:
+            continue
+        medal = medals[i] if i < 3 else f"{i+1}."
+        embed.add_field(name=f"{medal} {member.display_name}", value=f"Points: **{points}**", inline=False)
+    embed.set_footer(text="Keep helping to climb the leaderboard! 💪")
+    await ctx.send(embed=embed)
+
+# =========================
+# ---- PERMISSIONS ----
+# =========================
 async def get_config(guild):
     return await db.get_server_config(guild.id) or {}
 
@@ -74,20 +111,23 @@ async def is_staff(member):
     cfg = await get_config(member.guild)
     return has_role(member, cfg.get('staff_role_id')) or await is_admin(member)
 
-# ---- Events ----
+# =========================
+# ---- EVENTS ----
+# =========================
 @bot.event
 async def on_ready():
     await db.initialize_database()
     print(f"✅ {bot.user} online!")
 
-# ---- Setup Command ----
+# =========================
+# ---- SETUP COMMAND ----
+# =========================
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup(ctx):
     view = SetupView(ctx.guild)
     await ctx.send("🔧 **Bot Setup:** Select what to configure.", view=view)
 
-# ---- Setup UI ----
 class SetupView(View):
     def __init__(self, guild):
         super().__init__(timeout=240)
@@ -166,7 +206,9 @@ class ChannelModal(Modal):
         await db.update_server_config(self.guild.id, **{self.key: ch.id})
         await interaction.response.send_message(f"✅ Set to {ch.mention}.", ephemeral=True)
 
-# ---- Panel Command ----
+# =========================
+# ---- PANEL + TICKETS ----
+# =========================
 @bot.command()
 async def panel(ctx):
     if not await is_staff(ctx.author):
@@ -186,15 +228,8 @@ async def panel(ctx):
         "3. Wait for helpers to join\n"
         "4. Get help in your private ticket!\n"
     )
-    embed = discord.Embed(
-        title="🎟️ Ticket Panel",
-        description=desc,
-        color=discord.Color.blurple()
-    )
-    options = [
-        discord.SelectOption(label=k, value=k, description=f"{pts[k]} pts | {slots.get(k, DEFAULT_SLOTS)} helpers")
-        for k in pts
-    ]
+    embed = discord.Embed(title="🎟️ Ticket Panel", description=desc, color=discord.Color.blurple())
+    options = [discord.SelectOption(label=k, value=k, description=f"{pts[k]} pts | {slots.get(k, DEFAULT_SLOTS)} helpers") for k in pts]
 
     class TicketSelect(Select):
         def __init__(self):
@@ -223,18 +258,12 @@ class TicketModal(Modal):
             self.guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True)
         }
-        if cfg.get('helper_role_id'):
-            helper_role = self.guild.get_role(cfg['helper_role_id'])
-            if helper_role:
-                overwrites[helper_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        if cfg.get('staff_role_id'):
-            staff_role = self.guild.get_role(cfg['staff_role_id'])
-            if staff_role:
-                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        if cfg.get('admin_role_id'):
-            admin_role = self.guild.get_role(cfg['admin_role_id'])
-            if admin_role:
-                overwrites[admin_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        for role_key in ['helper_role_id', 'staff_role_id', 'admin_role_id']:
+            role_id = cfg.get(role_key)
+            if role_id:
+                role = self.guild.get_role(role_id)
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
         pts = await db.get_point_values(self.guild.id) or DEFAULT_POINT_VALUES
         slots = await db.get_helper_slots(self.guild.id) or DEFAULT_HELPER_SLOTS
         slot_count = slots.get(self.ticket_type, DEFAULT_SLOTS)
@@ -256,105 +285,10 @@ class TicketModal(Modal):
         embed.add_field(name="Helpers", value="\n".join([f"{i+1}. [Empty]" for i in range(slot_count)]), inline=False)
         embed.add_field(name="Reward", value=f"{pts[self.ticket_type]} points per helper", inline=False)
         embed.set_footer(text="Only staff/admin can close this ticket. Helpers: use the button below to join!")
-        view = TicketView(interaction.user, self.ticket_type, slot_count, pts[self.ticket_type], db)
-        await channel.send(embed=embed, view=view)
+        await channel.send(embed=embed)
         await interaction.response.send_message(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
-# ---- Ticket View ----
-class TicketView(View):
-    def __init__(self, owner, ttype, slots, reward, db):
-        super().__init__(timeout=None)
-        self.owner = owner
-        self.ttype = ttype
-        self.slots = slots
-        self.helpers = []
-        self.reward = reward
-        self.db = db
-
-    @discord.ui.button(label="Join as Helper", style=discord.ButtonStyle.green, emoji="🙋")
-    async def join_btn(self, interaction, btn):
-        cfg = await get_config(interaction.guild)
-        if cfg.get('helper_role_id') and not has_role(interaction.user, cfg['helper_role_id']) and not await is_staff(interaction.user):
-            return await interaction.response.send_message("❌ Only helpers or staff can join.", ephemeral=True)
-        if interaction.user in self.helpers:
-            return await interaction.response.send_message("❌ Already joined.", ephemeral=True)
-        if len(self.helpers) >= self.slots:
-            return await interaction.response.send_message("❌ Helper slots full!", ephemeral=True)
-        self.helpers.append(interaction.user)
-        await interaction.channel.set_permissions(interaction.user, view_channel=True, send_messages=True)
-        await self._refresh_embed(interaction)
-        await interaction.response.send_message("✅ Joined as helper!", ephemeral=True)
-
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.grey, emoji="🚪")
-    async def leave_btn(self, interaction, btn):
-        if interaction.user not in self.helpers:
-            return await interaction.response.send_message("❌ You are not a helper in this ticket.", ephemeral=True)
-        self.helpers.remove(interaction.user)
-        await interaction.channel.set_permissions(interaction.user, overwrite=None)
-        await self._refresh_embed(interaction)
-        await interaction.response.send_message("👋 You left the ticket.", ephemeral=True)
-
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, emoji="🔒")
-    async def close_btn(self, interaction, btn):
-        if not await is_staff(interaction.user):
-            return await interaction.response.send_message("❌ Only staff or admin can close this ticket.", ephemeral=True)
-        messages = []
-        async for m in interaction.channel.history(limit=None, oldest_first=True):
-            messages.append(f"[{m.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {m.author}: {m.content}")
-        transcript = "\n".join(messages)
-        cfg = await get_config(interaction.guild)
-        logch = interaction.guild.get_channel(cfg.get('transcript_channel_id')) if cfg.get('transcript_channel_id') else None
-        if logch:
-            if len(transcript) < 1900:
-                await logch.send(f"📄 **Transcript for {interaction.channel.name}**\n```{transcript}```")
-            else:
-                import io
-                f = discord.File(fp=io.BytesIO(transcript.encode()), filename=f"transcript-{interaction.channel.name}.txt")
-                await logch.send(f"📄 **Transcript for {interaction.channel.name}**", file=f)
-        for h in self.helpers:
-            await self.db.add_user_points(interaction.guild.id, h.id, self.reward)
-        await interaction.response.send_message("🔒 Ticket will be closed & deleted in 5s.")
-        await asyncio.sleep(5)
-        await interaction.channel.delete()
-
-    async def _refresh_embed(self, interaction):
-        embed = interaction.message.embeds[0]
-        lines = [f"{i+1}. {h.mention}" for i, h in enumerate(self.helpers)]
-        lines += [f"{i+1+len(self.helpers)}. [Empty]" for i in range(self.slots - len(self.helpers))]
-        for idx, field in enumerate(embed.fields):
-            if field.name == "Helpers":
-                embed.set_field_at(idx, name="Helpers", value="\n".join(lines), inline=False)
-        await interaction.message.edit(embed=embed, view=self)
-
-# ---- Points & Leaderboard ----
-@bot.command(aliases=["lb"])
-async def leaderboard(ctx, page: int = 1):
-    pts = await db.get_all_user_points(ctx.guild.id)
-    users = sorted(pts.items(), key=lambda x: x[1], reverse=True)
-    start = (page - 1) * 10
-    end = start + 10
-    embed = discord.Embed(title="🏆 Helper Leaderboard", description=f"Page {page}", color=discord.Color.gold())
-    if not users:
-        embed.description = "No points yet."
-    else:
-        for idx, (uid, score) in enumerate(users[start:end], start=start + 1):
-            member = ctx.guild.get_member(uid)
-            embed.add_field(name=f"{idx}. {member.mention if member else uid}", value=f"Points: **{score}**", inline=True)
-    await ctx.send(embed=embed)
-
-# ---- Run Flask to satisfy Render ----
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "Bot is running!"
-
-# ---- Run Bot ----
-async def start_bot():
-    await bot.start(TOKEN)
-
-if __name__ == "__main__":
-    import threading
-    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))).start()
-    asyncio.run(start_bot())
-
+# =========================
+# ---- RUN BOT ----
+# =========================
+bot.run(TOKEN)
