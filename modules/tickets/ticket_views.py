@@ -65,6 +65,45 @@ class TicketView(View):
         except Exception as e:
             print(f"Error updating embed: {e}")
 
+    async def send_staff_notification(self, message: str, guild: discord.Guild):
+        """Send notification message only to staff/admin roles"""
+        try:
+            config = await db.get_server_config(guild.id)
+            if not config:
+                return
+            
+            admin_role_id = config.get("admin_role_id")
+            staff_role_id = config.get("staff_role_id")
+            
+            # Get staff/admin members
+            staff_mentions = []
+            
+            if admin_role_id:
+                admin_role = guild.get_role(admin_role_id)
+                if admin_role:
+                    staff_mentions.extend([member.mention for member in admin_role.members if not member.bot])
+            
+            if staff_role_id:
+                staff_role = guild.get_role(staff_role_id)
+                if staff_role:
+                    staff_mentions.extend([member.mention for member in staff_role.members if not member.bot])
+            
+            # Remove duplicates
+            staff_mentions = list(set(staff_mentions))
+            
+            if staff_mentions:
+                # Send message with staff mentions (only they'll be notified)
+                staff_ping = " ".join(staff_mentions[:5])  # Limit to 5 mentions
+                await self.channel.send(f"{message} ({staff_ping})", delete_after=30)
+            else:
+                # No staff configured, send regular message
+                await self.channel.send(message, delete_after=30)
+                
+        except Exception as e:
+            print(f"Error sending staff notification: {e}")
+            # Fallback to regular message
+            await self.channel.send(message, delete_after=30)
+
 class JoinButton(Button):
     def __init__(self, ticket_view: TicketView):
         super().__init__(label="Join as Helper", style=ButtonStyle.success, emoji="🙋")
@@ -134,44 +173,167 @@ class JoinButton(Button):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error joining ticket: {str(e)}", ephemeral=True)
 
-    async def send_staff_notification(self, message: str, guild: discord.Guild):
-        """Send notification message only to staff/admin roles"""
+class TicketCloseConfirmationView(discord.ui.View):
+    def __init__(self, ticket_view: TicketView, staff_member: discord.Member):
+        super().__init__(timeout=60)
+        self.ticket_view = ticket_view
+        self.staff_member = staff_member
+        self.value = None
+
+    @discord.ui.button(label="✅ Approve & Give Points", style=discord.ButtonStyle.success)
+    async def approve_close(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            config = await db.get_server_config(guild.id)
-            if not config:
-                return
+            # Get point values for this category
+            ticket_cog = interaction.client.get_cog("TicketCommandsCog")
+            points = ticket_cog.CATEGORY_POINTS.get(self.ticket_view.category, 0) if ticket_cog else 0
             
-            admin_role_id = config.get("admin_role_id")
-            staff_role_id = config.get("staff_role_id")
+            # Award points to helpers
+            for helper in self.ticket_view.helpers:
+                await db.add_user_points(self.ticket_view.guild_id, helper.id, points)
+
+            # Save transcript
+            if isinstance(interaction.channel, discord.TextChannel):
+                await self.save_transcript(interaction.channel, self.staff_member)
+
+            # Remove from active tickets
+            await db.remove_active_ticket(self.ticket_view.guild_id, self.ticket_view.channel.id)
+
+            # Create closing embed
+            embed = discord.Embed(
+                title="✅ Ticket Completed Successfully",
+                description=f"This **{self.ticket_view.category}** ticket has been completed and approved!",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="👤 Closed By", value=self.staff_member.mention, inline=True)
+            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers", inline=True)
+            embed.add_field(name="🏆 Points Awarded", value=f"{points} points each", inline=True)
             
-            # Get staff/admin members
-            staff_mentions = []
+            if self.ticket_view.helpers:
+                helper_mentions = "\n".join([f"• {helper.mention}" for helper in self.ticket_view.helpers])
+                embed.add_field(name="🎉 Points Recipients", value=helper_mentions, inline=False)
             
-            if admin_role_id:
-                admin_role = guild.get_role(admin_role_id)
-                if admin_role:
-                    staff_mentions.extend([member.mention for member in admin_role.members if not member.bot])
+            embed.add_field(name="⏰ Channel Deletion", value="This channel will be deleted in 15 seconds.", inline=False)
+            embed.timestamp = discord.utils.utcnow()
+
+            await interaction.response.edit_message(embed=embed, view=None)
+            await self.ticket_view.channel.send(embed=embed)
             
-            if staff_role_id:
-                staff_role = guild.get_role(staff_role_id)
-                if staff_role:
-                    staff_mentions.extend([member.mention for member in staff_role.members if not member.bot])
+            # Delete channel after delay
+            await asyncio.sleep(15)
+            if isinstance(interaction.channel, discord.TextChannel):
+                await interaction.channel.delete(reason=f"Ticket approved and closed by {self.staff_member.display_name}")
             
-            # Remove duplicates
-            staff_mentions = list(set(staff_mentions))
-            
-            if staff_mentions:
-                # Send message with staff mentions (only they'll be notified)
-                staff_ping = " ".join(staff_mentions[:5])  # Limit to 5 mentions
-                await self.channel.send(f"{message} ({staff_ping})", delete_after=30)
-            else:
-                # No staff configured, send regular message
-                await self.channel.send(message, delete_after=30)
-                
         except Exception as e:
-            print(f"Error sending staff notification: {e}")
-            # Fallback to regular message
-            await self.channel.send(message, delete_after=30)
+            await interaction.response.send_message(f"❌ Error approving ticket: {str(e)}", ephemeral=True)
+
+    @discord.ui.button(label="❌ Decline (No Points)", style=discord.ButtonStyle.danger)
+    async def decline_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Save transcript but don't award points
+            if isinstance(interaction.channel, discord.TextChannel):
+                await self.save_transcript(interaction.channel, self.staff_member)
+
+            # Remove from active tickets
+            await db.remove_active_ticket(self.ticket_view.guild_id, self.ticket_view.channel.id)
+
+            # Create closing embed
+            embed = discord.Embed(
+                title="❌ Ticket Declined",
+                description=f"This **{self.ticket_view.category}** ticket has been closed without awarding points.",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="👤 Closed By", value=self.staff_member.mention, inline=True)
+            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers", inline=True)
+            embed.add_field(name="🏆 Points Awarded", value="0 points (declined)", inline=True)
+            embed.add_field(name="💡 Reason", value="Ticket was declined by staff", inline=False)
+            embed.add_field(name="⏰ Channel Deletion", value="This channel will be deleted in 15 seconds.", inline=False)
+            embed.timestamp = discord.utils.utcnow()
+
+            await interaction.response.edit_message(embed=embed, view=None)
+            await self.ticket_view.channel.send(embed=embed)
+            
+            # Delete channel after delay
+            await asyncio.sleep(15)
+            if isinstance(interaction.channel, discord.TextChannel):
+                await interaction.channel.delete(reason=f"Ticket declined by {self.staff_member.display_name}")
+            
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error declining ticket: {str(e)}", ephemeral=True)
+
+    @discord.ui.button(label="🚫 Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="🚫 Ticket Closure Cancelled",
+            description="The ticket remains open.",
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    async def save_transcript(self, channel: discord.TextChannel, closed_by: discord.Member):
+        """Save transcript of the ticket"""
+        try:
+            config = await db.get_server_config(channel.guild.id)
+            transcript_channel_id = config.get("transcript_channel_id") if config else None
+            
+            if not transcript_channel_id:
+                return  # No transcript channel configured
+            
+            transcript_channel = channel.guild.get_channel(transcript_channel_id)
+            if not transcript_channel:
+                return
+
+            # Collect messages
+            messages = []
+            async for message in channel.history(limit=None, oldest_first=True):
+                content = message.content if message.content else "[No text content]"
+                timestamp = message.created_at.strftime('%Y-%m-%d %H:%M:%S UTC')
+                author = f"{message.author.display_name} ({message.author.id})"
+                messages.append(f"[{timestamp}] {author}: {content}")
+                
+                # Add attachments info
+                for attachment in message.attachments:
+                    messages.append(f"    📎 Attachment: {attachment.filename} ({attachment.url})")
+                
+                # Add embeds info
+                for embed in message.embeds:
+                    if embed.title:
+                        messages.append(f"    📋 Embed: {embed.title}")
+
+            # Create transcript file
+            transcript_content = f"=== TRANSCRIPT: {channel.name} ===\n"
+            transcript_content += f"Ticket Category: {self.ticket_view.category}\n"
+            transcript_content += f"Ticket Owner: {self.ticket_view.owner.display_name} ({self.ticket_view.owner.id})\n"
+            transcript_content += f"Helpers: {len(self.ticket_view.helpers)}\n"
+            transcript_content += f"Closed by: {closed_by.display_name} ({closed_by.id})\n"
+            transcript_content += f"Closed at: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+            transcript_content += "=" * 50 + "\n\n"
+            transcript_content += "\n".join(messages)
+            
+            transcript_file = discord.File(
+                fp=io.BytesIO(transcript_content.encode('utf-8')),
+                filename=f"transcript-{channel.name}.txt"
+            )
+
+            # Send to transcript channel
+            embed = discord.Embed(
+                title=f"📄 Ticket Transcript",
+                description=f"**Category:** {self.ticket_view.category}",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="🎫 Ticket Owner", value=self.ticket_view.owner.mention, inline=True)
+            embed.add_field(name="🔒 Closed By", value=closed_by.mention, inline=True)
+            embed.add_field(name="📍 Channel", value=f"#{channel.name}", inline=True)
+            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers", inline=True)
+            embed.add_field(name="⏰ Closed At", value=discord.utils.format_dt(discord.utils.utcnow(), style='F'), inline=True)
+            
+            if self.ticket_view.helpers:
+                helper_list = ", ".join([h.display_name for h in self.ticket_view.helpers])
+                embed.add_field(name="🎉 Helper List", value=helper_list, inline=False)
+
+            await transcript_channel.send(embed=embed, file=transcript_file)
+            
+        except Exception as e:
+            print(f"Error saving transcript: {e}")
 
 class RemoveHelperButton(Button):
     def __init__(self, ticket_view: TicketView):
@@ -181,6 +343,10 @@ class RemoveHelperButton(Button):
     async def callback(self, interaction: Interaction):
         try:
             # Check permissions
+            if not interaction.guild or not isinstance(interaction.user, discord.Member):
+                await interaction.response.send_message("❌ Error: This command can only be used in servers!", ephemeral=True)
+                return
+                
             config = await db.get_server_config(interaction.guild.id)
             is_admin = interaction.user.guild_permissions.administrator
             is_staff = False
@@ -275,7 +441,11 @@ class CloseButton(Button):
 
     async def callback(self, interaction: Interaction):
         try:
-            # Check permissions - only staff/admin can close
+            # Check permissions - ONLY staff/admin can close (not owners, helpers, or viewers)
+            if not interaction.guild or not isinstance(interaction.user, discord.Member) or not isinstance(interaction.channel, discord.TextChannel):
+                await interaction.response.send_message("❌ Error: This command can only be used in text channels!", ephemeral=True)
+                return
+                
             config = await db.get_server_config(interaction.guild.id)
             is_admin = interaction.user.guild_permissions.administrator
             is_staff = False
@@ -291,19 +461,19 @@ class CloseButton(Button):
                     is_staff = True
             
             if not (is_admin or is_staff):
-                await interaction.response.send_message("❌ Only staff or admins can close tickets!", ephemeral=True)
+                await interaction.response.send_message("❌ Only staff or administrators can close tickets!", ephemeral=True)
                 return
 
             # Show confirmation view
             confirmation_view = TicketCloseConfirmationView(self.ticket_view, interaction.user)
             
             embed = discord.Embed(
-                title="🔒 Close Ticket Confirmation",
+                title="⚠️ Confirm Ticket Closure",
                 description=f"Are you sure you want to close this **{self.ticket_view.category}** ticket?",
                 color=discord.Color.orange()
             )
-            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers will be affected", inline=True)
-            embed.add_field(name="🏆 Points", value="Choose whether to award points", inline=True)
+            embed.add_field(name="📋 Ticket Info", value=f"Category: {self.ticket_view.category}\nHelpers: {len(self.ticket_view.helpers)}", inline=True)
+            embed.add_field(name="🏆 Points", value=f"Each helper will receive points if approved", inline=True)
             embed.add_field(name="⚠️ Warning", value="This action cannot be undone!", inline=False)
             
             await interaction.response.send_message(embed=embed, view=confirmation_view, ephemeral=True)
@@ -311,163 +481,69 @@ class CloseButton(Button):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error accessing close ticket: {str(e)}", ephemeral=True)
 
-class TicketCloseConfirmationView(discord.ui.View):
-    def __init__(self, ticket_view: TicketView, staff_member: discord.Member):
-        super().__init__(timeout=60)
-        self.ticket_view = ticket_view
-        self.staff_member = staff_member
-        self.value = None
-
-    @discord.ui.button(label="✅ Approve & Give Points", style=discord.ButtonStyle.success)
-    async def approve_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # Get point values for this category
-            ticket_cog = interaction.client.get_cog("TicketCommandsCog")
-            points = ticket_cog.CATEGORY_POINTS.get(self.ticket_view.category, 0) if ticket_cog else 0
-            
-            # Award points to helpers
-            for helper in self.ticket_view.helpers:
-                await db.add_user_points(self.ticket_view.guild_id, helper.id, points)
-
-            # Save transcript
-            if isinstance(interaction.channel, discord.TextChannel):
-                await self.save_transcript(interaction.channel, self.staff_member)
-
-            # Remove from active tickets
-            await db.remove_active_ticket(self.ticket_view.guild_id, self.ticket_view.channel.id)
-
-            # Create closing embed
-            embed = discord.Embed(
-                title="✅ Ticket Completed Successfully",
-                description=f"This **{self.ticket_view.category}** ticket has been completed and approved!",
-                color=discord.Color.green()
-            )
-            embed.add_field(name="👤 Closed By", value=self.staff_member.mention, inline=True)
-            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers", inline=True)
-            embed.add_field(name="🏆 Points Awarded", value=f"{points} points each", inline=True)
-            
-            if self.ticket_view.helpers:
-                helper_mentions = "\n".join([f"• {helper.mention}" for helper in self.ticket_view.helpers])
-                embed.add_field(name="🎉 Points Recipients", value=helper_mentions, inline=False)
-            
-            embed.add_field(name="⏰ Channel Deletion", value="This channel will be deleted in 15 seconds.", inline=False)
-            embed.timestamp = discord.utils.utcnow()
-
-            await interaction.response.edit_message(embed=embed, view=None)
-            await self.ticket_view.channel.send(embed=embed)
-            
-            # Delete channel after delay
-            await asyncio.sleep(15)
-            if isinstance(interaction.channel, discord.TextChannel):
-                await interaction.channel.delete(reason=f"Ticket approved and closed by {self.staff_member.display_name}")
-            
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error approving ticket: {str(e)}", ephemeral=True)
-
-    @discord.ui.button(label="❌ Decline (No Points)", style=discord.ButtonStyle.danger)
-    async def decline_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # Save transcript but don't award points
-            if isinstance(interaction.channel, discord.TextChannel):
-                await self.save_transcript(interaction.channel, self.staff_member)
-
-            # Remove from active tickets
-            await db.remove_active_ticket(self.ticket_view.guild_id, self.ticket_view.channel.id)
-
-            # Create closing embed
-            embed = discord.Embed(
-                title="❌ Ticket Declined",
-                description=f"This **{self.ticket_view.category}** ticket has been closed without awarding points.",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="👤 Closed By", value=self.staff_member.mention, inline=True)
-            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers", inline=True)
-            embed.add_field(name="🏆 Points Awarded", value="0 points (declined)", inline=True)
-            embed.add_field(name="💡 Reason", value="Ticket was declined by staff", inline=False)
-            embed.add_field(name="⏰ Channel Deletion", value="This channel will be deleted in 15 seconds.", inline=False)
-            embed.timestamp = discord.utils.utcnow()
-
-            await interaction.response.edit_message(embed=embed, view=None)
-            await self.ticket_view.channel.send(embed=embed)
-            
-            # Delete channel after delay
-            await asyncio.sleep(15)
-            if isinstance(interaction.channel, discord.TextChannel):
-                await interaction.channel.delete(reason=f"Ticket declined by {self.staff_member.display_name}")
-            
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error declining ticket: {str(e)}", ephemeral=True)
-
-    @discord.ui.button(label="🚫 Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="🚫 Ticket Close Cancelled",
-            description="The ticket remains open.",
-            color=discord.Color.blue()
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
-
-    async def save_transcript(self, channel, closed_by):
-        """Save transcript to the configured transcript channel"""
+    async def save_transcript(self, channel: discord.TextChannel, closed_by: discord.Member):
+        """Save transcript of the ticket"""
         try:
             config = await db.get_server_config(channel.guild.id)
-            transcript_channel_id = config.get("transcript_channel_id")
+            transcript_channel_id = config.get("transcript_channel_id") if config else None
             
             if not transcript_channel_id:
                 return  # No transcript channel configured
-                
+            
             transcript_channel = channel.guild.get_channel(transcript_channel_id)
             if not transcript_channel:
-                return  # Transcript channel not found
-            
-            # Create transcript embed
-            embed = discord.Embed(
-                title="📄 Ticket Transcript",
-                description=f"Transcript for ticket: **{channel.name}**",
-                color=discord.Color.blue()
-            )
-            
-            # Add ticket information
-            embed.add_field(name="🎫 Channel", value=channel.mention, inline=True)
-            embed.add_field(name="🏷️ Category", value=self.ticket_view.category, inline=True)
-            embed.add_field(name="👤 Owner", value=self.ticket_view.owner.mention, inline=True)
-            embed.add_field(name="🔒 Closed By", value=closed_by.mention, inline=True)
-            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers", inline=True)
-            embed.add_field(name="🏆 Rewarded", value="✅ Yes", inline=True)
-            
-            if self.ticket_view.helpers:
-                helper_list = [h.mention for h in self.ticket_view.helpers]
-                embed.add_field(name="🙋 Helper List", value="\n".join(helper_list), inline=False)
-            
-            embed.set_footer(text=f"Ticket closed on")
-            embed.timestamp = discord.utils.utcnow()
-            
-            # Get recent messages for transcript
+                return
+
+            # Collect messages
             messages = []
-            async for message in channel.history(limit=100, oldest_first=True):
-                if not message.author.bot or message.embeds:
-                    timestamp = message.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                    content = message.content if message.content else "[Embed/Attachment]"
-                    messages.append(f"[{timestamp}] {message.author.display_name}: {content}")
+            async for message in channel.history(limit=None, oldest_first=True):
+                content = message.content if message.content else "[No text content]"
+                timestamp = message.created_at.strftime('%Y-%m-%d %H:%M:%S UTC')
+                author = f"{message.author.display_name} ({message.author.id})"
+                messages.append(f"[{timestamp}] {author}: {content}")
+                
+                # Add attachments info
+                for attachment in message.attachments:
+                    messages.append(f"    📎 Attachment: {attachment.filename} ({attachment.url})")
+                
+                # Add embeds info
+                for embed in message.embeds:
+                    if embed.title:
+                        messages.append(f"    📋 Embed: {embed.title}")
+
+            # Create transcript file
+            transcript_content = f"=== TRANSCRIPT: {channel.name} ===\n"
+            transcript_content += f"Ticket Category: {self.ticket_view.category}\n"
+            transcript_content += f"Ticket Owner: {self.ticket_view.owner.display_name} ({self.ticket_view.owner.id})\n"
+            transcript_content += f"Helpers: {len(self.ticket_view.helpers)}\n"
+            transcript_content += f"Closed by: {closed_by.display_name} ({closed_by.id})\n"
+            transcript_content += f"Closed at: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+            transcript_content += "=" * 50 + "\n\n"
+            transcript_content += "\n".join(messages)
             
-            # Create transcript text file
-            transcript_text = f"Ticket Transcript: {channel.name}\n"
-            transcript_text += f"Category: {self.ticket_view.category}\n"
-            transcript_text += f"Owner: {self.ticket_view.owner.display_name}\n"
-            transcript_text += f"Closed by: {closed_by.display_name}\n"
-            transcript_text += f"Helpers: {len(self.ticket_view.helpers)}\n"
-            transcript_text += f"Rewarded: Yes\n"
-            transcript_text += f"Closed on: {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
-            transcript_text += "\n" + "="*50 + "\n\n"
-            transcript_text += "\n".join(messages)
-            
-            # Create file and send
-            file = discord.File(
-                fp=io.StringIO(transcript_text),
+            transcript_file = discord.File(
+                fp=io.BytesIO(transcript_content.encode('utf-8')),
                 filename=f"transcript-{channel.name}.txt"
             )
+
+            # Send to transcript channel
+            embed = discord.Embed(
+                title=f"📄 Ticket Transcript",
+                description=f"**Category:** {self.ticket_view.category}",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="🎫 Ticket Owner", value=self.ticket_view.owner.mention, inline=True)
+            embed.add_field(name="🔒 Closed By", value=closed_by.mention, inline=True)
+            embed.add_field(name="📍 Channel", value=f"#{channel.name}", inline=True)
+            embed.add_field(name="👥 Helpers", value=f"{len(self.ticket_view.helpers)} helpers", inline=True)
+            embed.add_field(name="🏆 Points Awarded", value=f"{len(self.ticket_view.helpers)} × points", inline=True)
+            embed.add_field(name="⏰ Closed At", value=discord.utils.format_dt(discord.utils.utcnow(), style='F'), inline=True)
             
-            await transcript_channel.send(embed=embed, file=file)
+            if self.ticket_view.helpers:
+                helper_list = ", ".join([h.display_name for h in self.ticket_view.helpers])
+                embed.add_field(name="🎉 Helper List", value=helper_list, inline=False)
+
+            await transcript_channel.send(embed=embed, file=transcript_file)
             
         except Exception as e:
             print(f"Error saving transcript: {e}")

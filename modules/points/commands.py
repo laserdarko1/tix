@@ -1,362 +1,294 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
+from discord import app_commands, ui
 from database import DatabaseManager
 
 db = DatabaseManager()
 
-class PointsCommandsCog(commands.Cog):
+class PointsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="mypoints", description="Check your current points")
-    async def my_points(self, interaction: discord.Interaction):
-        """Check user's own points"""
+    # ==================== POINTS COMMAND ====================
+    @app_commands.command(name="points", description="Check points for yourself or another user")
+    @app_commands.describe(member="The user to check points for (optional)")
+    async def points(self, interaction: discord.Interaction, member: discord.Member = None):
+        """Check points for yourself or another user"""
         try:
-            points = await db.get_user_points(interaction.guild.id, interaction.user.id)
+            member = member or interaction.user
+            points = await db.get_user_points(interaction.guild.id, member.id)
             
             embed = discord.Embed(
-                title="💰 Your Points",
-                description=f"You currently have **{points}** points!",
-                color=discord.Color.green()
-            )
-            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-            embed.set_footer(text="Keep helping others to earn more points!")
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error getting points: {str(e)}", ephemeral=True)
-
-    @app_commands.command(name="points", description="Check points for any user")
-    async def check_points(self, interaction: discord.Interaction, user: discord.Member = None):
-        """Check points for a specific user"""
-        try:
-            target_user = user or interaction.user
-            points = await db.get_user_points(interaction.guild.id, target_user.id)
-            
-            if target_user == interaction.user:
-                title = "💰 Your Points"
-                description = f"You currently have **{points}** points!"
-            else:
-                title = f"💰 {target_user.display_name}'s Points"
-                description = f"{target_user.mention} currently has **{points}** points!"
-            
-            embed = discord.Embed(
-                title=title,
-                description=description,
+                title="💰 Points Check",
+                description=f"{member.display_name} has **{points}** points.",
                 color=discord.Color.blue()
             )
-            embed.set_author(name=target_user.display_name, icon_url=target_user.display_avatar.url)
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error getting points: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="leaderboard", description="View the points leaderboard")
+    # ==================== LEADERBOARD COMMAND ====================
+    @app_commands.command(name="leaderboard", description="Show the top 10 users on the leaderboard")
     async def leaderboard(self, interaction: discord.Interaction):
-        """Show the points leaderboard"""
+        """Show the top 10 users on the leaderboard"""
         try:
             all_points = await db.get_all_user_points(interaction.guild.id)
-            
             if not all_points:
                 embed = discord.Embed(
-                    title="🏆 Points Leaderboard",
-                    description="No one has points yet! Start helping others to earn points.",
+                    title="🏆 Leaderboard",
+                    description="No points recorded yet. Start helping to earn points!",
                     color=discord.Color.orange()
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.response.send_message(embed=embed)
                 return
-            
-            # Sort by points (descending)
-            sorted_users = sorted(all_points.items(), key=lambda x: x[1], reverse=True)
+
+            sorted_points = sorted(all_points.items(), key=lambda x: x[1], reverse=True)
             
             embed = discord.Embed(
-                title="🏆 Points Leaderboard",
-                description="Top helpers in this server:",
+                title="🏆 Top Helpers Leaderboard",
+                description="Here are our amazing helpers ranked by their contributions!",
                 color=discord.Color.gold()
             )
             
-            # Show top 10
-            for i, (user_id, points) in enumerate(sorted_users[:10], 1):
-                user = interaction.guild.get_member(user_id)
-                if user:
-                    # Add medal emojis for top 3
-                    if i == 1:
-                        emoji = "🥇"
-                    elif i == 2:
-                        emoji = "🥈"
-                    elif i == 3:
-                        emoji = "🥉"
-                    else:
-                        emoji = f"{i}."
-                    
-                    embed.add_field(
-                        name=f"{emoji} {user.display_name}",
-                        value=f"{points} points",
-                        inline=True
-                    )
+            # Create a beautiful leaderboard display
+            leaderboard_text = ""
+            for i, (user_id, points) in enumerate(sorted_points[:10], start=1):
+                member = interaction.guild.get_member(user_id)
+                name = member.display_name if member else "Unknown User"
+                
+                # Add special formatting for top 3
+                if i == 1:
+                    leaderboard_text += f"🥇 **#{i} {name}** — `{points:,} points`\n"
+                elif i == 2:
+                    leaderboard_text += f"🥈 **#{i} {name}** — `{points:,} points`\n"
+                elif i == 3:
+                    leaderboard_text += f"🥉 **#{i} {name}** — `{points:,} points`\n"
+                else:
+                    leaderboard_text += f"🏅 **#{i} {name}** — `{points:,} points`\n"
             
-            embed.set_footer(text=f"Showing top {min(10, len(sorted_users))} helpers")
+            embed.add_field(name="📊 Top Contributors", value=leaderboard_text, inline=False)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error getting leaderboard: {str(e)}", ephemeral=True)
+            # Add some stats
+            total_helpers = len(sorted_points)
+            total_points = sum(points for _, points in sorted_points)
+            
+            stats_text = f"**Total Helpers:** {total_helpers}\n**Total Points Earned:** {total_points:,}\n**Average Points:** {total_points // total_helpers if total_helpers > 0 else 0:,}"
+            embed.add_field(name="📈 Server Stats", value=stats_text, inline=True)
+            
+            # Add motivational message
+            if len(sorted_points) >= 3:
+                top_3_avg = sum(points for _, points in sorted_points[:3]) // 3
+                embed.add_field(name="🎯 Challenge", value=f"Top 3 average: `{top_3_avg:,} points`\nHelp more tickets to climb higher!", inline=True)
+            
+            embed.set_footer(text=f"🏆 Showing top {min(len(sorted_points), 10)} out of {len(sorted_points)} helpers")
+            embed.timestamp = discord.utils.utcnow()
 
-    @app_commands.command(name="myrank", description="Check your leaderboard rank")
-    async def my_rank(self, interaction: discord.Interaction):
-        """Check user's rank on the leaderboard"""
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
+
+    # ==================== MY RANK COMMAND ====================
+    @app_commands.command(name="myrank", description="Show your current rank in the leaderboard")
+    async def myrank(self, interaction: discord.Interaction):
+        """Show your current rank in the leaderboard"""
         try:
             all_points = await db.get_all_user_points(interaction.guild.id)
+            sorted_points = sorted(all_points.items(), key=lambda x: x[1], reverse=True)
+            
             user_points = await db.get_user_points(interaction.guild.id, interaction.user.id)
             
-            if not all_points:
-                embed = discord.Embed(
-                    title="📊 Your Rank",
-                    description="No leaderboard data available yet!",
-                    color=discord.Color.orange()
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
+            embed = discord.Embed(color=discord.Color.blue())
+            embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url)
             
-            # Sort by points (descending)
-            sorted_users = sorted(all_points.items(), key=lambda x: x[1], reverse=True)
-            
-            # Find user's rank
-            rank = None
-            for i, (user_id, points) in enumerate(sorted_users, 1):
+            for i, (user_id, points) in enumerate(sorted_points, start=1):
                 if user_id == interaction.user.id:
-                    rank = i
-                    break
+                    embed.title = f"📊 Your Rank: #{i}"
+                    embed.description = f"You have **{points:,}** points and are ranked **#{i}** out of {len(sorted_points)} helpers."
+                    embed.add_field(name="🎯 Your Position", value=f"Rank #{i}", inline=True)
+                    embed.add_field(name="💰 Your Points", value=f"{points:,} points", inline=True)
+                    embed.add_field(name="👥 Total Helpers", value=f"{len(sorted_points)} helpers", inline=True)
+                    
+                    # Add progress info
+                    if i > 1:
+                        next_rank_points = sorted_points[i-2][1]
+                        points_needed = next_rank_points - points + 1
+                        embed.add_field(name="📈 Next Rank", value=f"{points_needed:,} points needed", inline=True)
+                    else:
+                        embed.add_field(name="👑 Status", value="You're #1!", inline=True)
+                    
+                    await interaction.response.send_message(embed=embed)
+                    return
             
-            embed = discord.Embed(
-                title="📊 Your Rank",
-                color=discord.Color.blue()
-            )
+            embed.title = "📊 Your Rank: Unranked"
+            embed.description = f"You have **{user_points:,}** points and are not yet on the leaderboard."
+            embed.add_field(name="💡 Tip", value="Start helping with tickets to earn points and join the leaderboard!", inline=False)
             
-            if rank:
-                embed.description = f"You are ranked **#{rank}** out of {len(sorted_users)} helpers!"
-                embed.add_field(name="💰 Your Points", value=f"{user_points} points", inline=True)
-                embed.add_field(name="🏆 Your Rank", value=f"#{rank}", inline=True)
-                
-                # Show points needed for next rank
-                if rank > 1:
-                    next_user_points = sorted_users[rank-2][1]  # User above them
-                    points_needed = next_user_points - user_points + 1
-                    embed.add_field(name="⬆️ Next Rank", value=f"{points_needed} more points", inline=True)
-            else:
-                embed.description = f"You're not on the leaderboard yet. You have {user_points} points."
-                embed.add_field(name="💡 Tip", value="Help others with tickets to earn points!", inline=False)
-            
-            embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error getting rank: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="addpoints", description="Add points to a user (staff only)")
-    @app_commands.describe(user="The user to add points to", amount="Number of points to add")
-    async def add_points(self, interaction: discord.Interaction, user: discord.Member, amount: int):
-        """Add points to a user (staff/admin only)"""
+    # ==================== ADD POINTS (ADMIN ONLY) ====================
+    @app_commands.command(name="addpoints", description="Add points to a user (admin only)")
+    @app_commands.describe(member="The user to add points to", amount="Amount of points to add")
+    @app_commands.default_permissions(administrator=True)
+    async def addpoints(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+        """Add points to a user (admin only)"""
         try:
-            # Check permissions
-            config = await db.get_server_config(interaction.guild.id)
-            is_admin = interaction.user.guild_permissions.administrator
-            is_staff = False
-            
-            if config:
-                admin_role_id = config.get("admin_role_id")
-                staff_role_id = config.get("staff_role_id")
-                user_role_ids = [role.id for role in interaction.user.roles]
-                
-                if admin_role_id and admin_role_id in user_role_ids:
-                    is_admin = True
-                if staff_role_id and staff_role_id in user_role_ids:
-                    is_staff = True
-            
-            if not (is_admin or is_staff):
-                await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
-                return
-            
             if amount <= 0:
                 await interaction.response.send_message("❌ Amount must be positive!", ephemeral=True)
                 return
-            
-            await db.add_user_points(interaction.guild.id, user.id, amount)
-            new_total = await db.get_user_points(interaction.guild.id, user.id)
+                
+            await db.add_user_points(interaction.guild.id, member.id, amount)
+            new_total = await db.get_user_points(interaction.guild.id, member.id)
             
             embed = discord.Embed(
                 title="✅ Points Added",
-                description=f"Successfully added **{amount}** points to {user.mention}!",
+                description=f"Added **{amount:,}** points to {member.mention}",
                 color=discord.Color.green()
             )
-            embed.add_field(name="New Total", value=f"{new_total} points", inline=True)
-            embed.add_field(name="Added By", value=interaction.user.mention, inline=True)
+            embed.add_field(name="New Total", value=f"{new_total:,} points", inline=True)
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error adding points: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="removepoints", description="Remove points from a user (staff only)")
-    @app_commands.describe(user="The user to remove points from", amount="Number of points to remove")
-    async def remove_points(self, interaction: discord.Interaction, user: discord.Member, amount: int):
-        """Remove points from a user (staff/admin only)"""
+    # ==================== REMOVE POINTS (ADMIN ONLY) ====================
+    @app_commands.command(name="removepoints", description="Remove points from a user (admin only)")
+    @app_commands.describe(member="The user to remove points from", amount="Amount of points to remove")
+    @app_commands.default_permissions(administrator=True)
+    async def removepoints(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+        """Remove points from a user (admin only)"""
         try:
-            # Check permissions
-            config = await db.get_server_config(interaction.guild.id)
-            is_admin = interaction.user.guild_permissions.administrator
-            is_staff = False
-            
-            if config:
-                admin_role_id = config.get("admin_role_id")
-                staff_role_id = config.get("staff_role_id")
-                user_role_ids = [role.id for role in interaction.user.roles]
-                
-                if admin_role_id and admin_role_id in user_role_ids:
-                    is_admin = True
-                if staff_role_id and staff_role_id in user_role_ids:
-                    is_staff = True
-            
-            if not (is_admin or is_staff):
-                await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
-                return
-            
             if amount <= 0:
                 await interaction.response.send_message("❌ Amount must be positive!", ephemeral=True)
                 return
-            
-            current_points = await db.get_user_points(interaction.guild.id, user.id)
-            new_points = max(0, current_points - amount)
-            
-            await db.set_user_points(interaction.guild.id, user.id, new_points)
+                
+            current = await db.get_user_points(interaction.guild.id, member.id)
+            new_total = max(current - amount, 0)
+            await db.set_user_points(interaction.guild.id, member.id, new_total)
             
             embed = discord.Embed(
                 title="✅ Points Removed",
-                description=f"Successfully removed **{amount}** points from {user.mention}!",
+                description=f"Removed **{amount:,}** points from {member.mention}",
                 color=discord.Color.orange()
             )
-            embed.add_field(name="Previous Total", value=f"{current_points} points", inline=True)
-            embed.add_field(name="New Total", value=f"{new_points} points", inline=True)
-            embed.add_field(name="Removed By", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Previous Total", value=f"{current:,} points", inline=True)
+            embed.add_field(name="New Total", value=f"{new_total:,} points", inline=True)
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error removing points: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="setpoints", description="Set specific point amount for a user (staff only)")
-    @app_commands.describe(user="The user to set points for", amount="Number of points to set")
-    async def set_points(self, interaction: discord.Interaction, user: discord.Member, amount: int):
-        """Set specific point amount for a user (staff/admin only)"""
+    # ==================== SET POINTS (ADMIN ONLY) ====================
+    @app_commands.command(name="setpoints", description="Set points for a user (admin only)")
+    @app_commands.describe(member="The user to set points for", amount="Amount of points to set")
+    @app_commands.default_permissions(administrator=True)
+    async def setpoints(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+        """Set points for a user (admin only)"""
         try:
-            # Check permissions
-            config = await db.get_server_config(interaction.guild.id)
-            is_admin = interaction.user.guild_permissions.administrator
-            is_staff = False
-            
-            if config:
-                admin_role_id = config.get("admin_role_id")
-                staff_role_id = config.get("staff_role_id")
-                user_role_ids = [role.id for role in interaction.user.roles]
-                
-                if admin_role_id and admin_role_id in user_role_ids:
-                    is_admin = True
-                if staff_role_id and staff_role_id in user_role_ids:
-                    is_staff = True
-            
-            if not (is_admin or is_staff):
-                await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
-                return
-            
             if amount < 0:
                 await interaction.response.send_message("❌ Amount cannot be negative!", ephemeral=True)
                 return
-            
-            old_points = await db.get_user_points(interaction.guild.id, user.id)
-            await db.set_user_points(interaction.guild.id, user.id, amount)
+                
+            await db.set_user_points(interaction.guild.id, member.id, amount)
             
             embed = discord.Embed(
                 title="✅ Points Set",
-                description=f"Successfully set {user.mention}'s points to **{amount}**!",
+                description=f"Set {member.mention}'s points to **{amount:,}**",
                 color=discord.Color.blue()
             )
-            embed.add_field(name="Previous Total", value=f"{old_points} points", inline=True)
-            embed.add_field(name="New Total", value=f"{amount} points", inline=True)
-            embed.add_field(name="Set By", value=interaction.user.mention, inline=True)
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error setting points: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="removeuser", description="Remove user from leaderboard (staff only)")
-    @app_commands.describe(user="The user to remove from leaderboard")
-    async def remove_user(self, interaction: discord.Interaction, user: discord.Member):
-        """Remove user from leaderboard (staff/admin only)"""
+    # ==================== REMOVE USER (ADMIN ONLY) ====================
+    @app_commands.command(name="removeuser", description="Remove a specific user from the leaderboard")
+    @app_commands.describe(member="The user to remove from leaderboard")
+    @app_commands.default_permissions(administrator=True)
+    async def removeuser(self, interaction: discord.Interaction, member: discord.Member):
+        """Remove a specific user from the leaderboard"""
         try:
-            # Check permissions
-            config = await db.get_server_config(interaction.guild.id)
-            is_admin = interaction.user.guild_permissions.administrator
-            is_staff = False
-            
-            if config:
-                admin_role_id = config.get("admin_role_id")
-                staff_role_id = config.get("staff_role_id")
-                user_role_ids = [role.id for role in interaction.user.roles]
-                
-                if admin_role_id and admin_role_id in user_role_ids:
-                    is_admin = True
-                if staff_role_id and staff_role_id in user_role_ids:
-                    is_staff = True
-            
-            if not (is_admin or is_staff):
-                await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
+            points = await db.get_user_points(interaction.guild.id, member.id)
+            if points == 0:
+                await interaction.response.send_message(f"❌ {member.display_name} is not on the leaderboard!", ephemeral=True)
                 return
-            
-            old_points = await db.get_user_points(interaction.guild.id, user.id)
-            await db.remove_user(interaction.guild.id, user.id)
+                
+            await db.remove_user(interaction.guild.id, member.id)
             
             embed = discord.Embed(
                 title="✅ User Removed",
-                description=f"Successfully removed {user.mention} from the leaderboard!",
+                description=f"{member.mention} has been removed from the leaderboard",
                 color=discord.Color.red()
             )
-            embed.add_field(name="Points Removed", value=f"{old_points} points", inline=True)
-            embed.add_field(name="Removed By", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Previous Points", value=f"{points:,} points", inline=True)
+            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error removing user: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="resetleaderboard", description="Reset entire leaderboard (admin only)")
-    async def reset_leaderboard(self, interaction: discord.Interaction):
-        """Reset entire leaderboard (admin only)"""
-        try:
-            # Check admin permissions
-            is_admin = interaction.user.guild_permissions.administrator
-            config = await db.get_server_config(interaction.guild.id)
-            
-            if config:
-                admin_role_id = config.get("admin_role_id")
-                user_role_ids = [role.id for role in interaction.user.roles]
-                
-                if admin_role_id and admin_role_id in user_role_ids:
-                    is_admin = True
-            
-            if not is_admin:
-                await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
-                return
-            
-            await db.clear_all_points(interaction.guild.id)
-            
-            embed = discord.Embed(
-                title="✅ Leaderboard Reset",
-                description="The entire points leaderboard has been reset!",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="Reset By", value=interaction.user.mention, inline=True)
-            embed.add_field(name="⚠️ Warning", value="This action cannot be undone!", inline=True)
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error resetting leaderboard: {str(e)}", ephemeral=True)
+    # ==================== RESET LEADERBOARD (ADMIN ONLY) ====================
+    @app_commands.command(name="resetleaderboard", description="Reset the leaderboard with confirmation")
+    @app_commands.default_permissions(administrator=True)
+    async def resetleaderboard(self, interaction: discord.Interaction):
+        """Reset the leaderboard with confirmation"""
+        
+        class ConfirmResetView(ui.View):
+            def __init__(self):
+                super().__init__(timeout=30)
+                self.value = None
 
+            @ui.button(label="✅ Confirm Reset", style=discord.ButtonStyle.danger)
+            async def confirm(self, button_interaction: discord.Interaction, button: ui.Button):
+                try:
+                    await db.clear_all_points(interaction.guild.id)
+                    
+                    embed = discord.Embed(
+                        title="✅ Leaderboard Reset",
+                        description="The leaderboard has been completely reset!",
+                        color=discord.Color.green()
+                    )
+                    
+                    await button_interaction.response.edit_message(embed=embed, view=None)
+                    self.value = True
+                    self.stop()
+                except Exception as e:
+                    await button_interaction.response.send_message(f"❌ Error resetting leaderboard: {str(e)}", ephemeral=True)
+
+            @ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+            async def cancel(self, button_interaction: discord.Interaction, button: ui.Button):
+                embed = discord.Embed(
+                    title="❌ Reset Cancelled",
+                    description="Leaderboard reset has been cancelled.",
+                    color=discord.Color.blue()
+                )
+                await button_interaction.response.edit_message(embed=embed, view=None)
+                self.value = False
+                self.stop()
+
+            async def on_timeout(self):
+                embed = discord.Embed(
+                    title="⏰ Timeout",
+                    description="Reset confirmation timed out. Leaderboard was not reset.",
+                    color=discord.Color.orange()
+                )
+                await interaction.edit_original_response(embed=embed, view=None)
+
+        embed = discord.Embed(
+            title="⚠️ Confirm Leaderboard Reset",
+            description="Are you sure you want to reset the entire leaderboard? This action cannot be undone!",
+            color=discord.Color.red()
+        )
+        
+        view = ConfirmResetView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+# ==================== LOAD COG ====================
 async def setup(bot):
-    await bot.add_cog(PointsCommandsCog(bot))
+    await bot.add_cog(PointsCog(bot))

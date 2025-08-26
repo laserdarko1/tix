@@ -46,8 +46,7 @@ class HelpCommandsCog(commands.Cog):
                 "`/points [@user]` - Check points for any user\n"
                 "`/myrank` - See your leaderboard position\n"
                 "`/leaderboard` - View the top helpers\n"
-                "`/pointsinfo` - Learn about the points system\n"
-                "`/ticketcount` - View ticket statistics"
+                "`/pointsinfo` - Learn about the points system"
             )
             embed.add_field(name="👤 General Commands", value=user_commands, inline=False)
 
@@ -86,7 +85,6 @@ class HelpCommandsCog(commands.Cog):
                     staff_commands += (
                         "`/resetleaderboard` - Reset entire leaderboard\n"
                         "`/createpanel` - Create ticket selection panel\n"
-                        "`/ticketcount` - View detailed ticket statistics\n"
                         "`/setup` - Configure server settings\n"
                         "`/setupcommands` - Configure custom commands\n"
                         "`/resetsetup` - Reset all configuration"
@@ -114,8 +112,7 @@ class HelpCommandsCog(commands.Cog):
                 "• Provide clear information in tickets\n"
                 "• Follow server rules and be respectful\n"
                 "• Help others to earn points and climb the leaderboard\n"
-                "• Check `/pointsinfo` for more details about earning points\n"
-                "• Opening tickets may also award points!"
+                "• Check `/pointsinfo` for more details about earning points"
             )
             embed.add_field(name="💡 Usage Tips", value=tips, inline=False)
 

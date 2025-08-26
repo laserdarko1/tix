@@ -134,7 +134,6 @@ class TicketCommandsCog(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error creating ticket panel: {str(e)}", ephemeral=True)
 
-
     async def create_ticket(self, interaction, category, answers):
         """Create a ticket with the given category and answers"""
         try:
@@ -169,19 +168,18 @@ class TicketCommandsCog(commands.Cog):
                 staff_role = interaction.guild.get_role(server_config["staff_role_id"])
                 if staff_role:
                     overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
-
-            # Add helper role permissions (with reactions, emotes, stickers)
+            
+            # Add helper role permissions (can see and join tickets)
             if server_config.get("helper_role_id"):
                 helper_role = interaction.guild.get_role(server_config["helper_role_id"])
                 if helper_role:
-                    overwrites[helper_role] = discord.PermissionOverwrite(
-                        view_channel=True, 
-                        send_messages=True, 
-                        read_message_history=True,
-                        add_reactions=True,
-                        use_external_emojis=True,
-                        use_external_stickers=True
-                    )
+                    overwrites[helper_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            
+            # Add viewer role permissions (read-only access)
+            if server_config.get("viewer_role_id"):
+                viewer_role = interaction.guild.get_role(server_config["viewer_role_id"])
+                if viewer_role:
+                    overwrites[viewer_role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True, add_reactions=False)
 
             # Create channel
             category_channel = interaction.guild.get_channel(server_config["ticket_category_id"])
@@ -234,9 +232,17 @@ class TicketCommandsCog(commands.Cog):
             embed.set_footer(text=f"Ticket ID: {ticket_number} | Created")
             embed.timestamp = discord.utils.utcnow()
 
+            # Get helper role for mention
+            helper_mention = ""
+            if server_config.get("helper_role_id"):
+                helper_role = interaction.guild.get_role(server_config["helper_role_id"])
+                if helper_role:
+                    helper_mention = f" {helper_role.mention}"
+
             await ticket_channel.send(
                 f"🎫 **New {category} Ticket**\n\n"
                 f"Hello {interaction.user.mention}! Your ticket has been created.\n"
+                f"📢 Calling all helpers!{helper_mention}\n\n"
                 f"📋 Helpers can join below to assist you with **{category}**.\n"
                 f"🏆 This ticket is worth **{CATEGORY_POINTS[category]} points** per helper.",
                 embed=embed,
@@ -245,11 +251,6 @@ class TicketCommandsCog(commands.Cog):
 
             # Save ticket in database
             await db.save_active_ticket(guild_id, ticket_channel.id, interaction.user.id, category, ticket_number)
-
-            # Award opening points to the user
-            opening_points = server_config.get("opening_points", 0)
-            if opening_points > 0:
-                await db.add_user_points(guild_id, interaction.user.id, opening_points)
 
             # Notify user
             success_embed = Embed(
@@ -260,9 +261,6 @@ class TicketCommandsCog(commands.Cog):
             success_embed.add_field(name="📍 Location", value=ticket_channel.mention, inline=True)
             success_embed.add_field(name="🎫 Ticket Number", value=f"#{ticket_number}", inline=True)
             success_embed.add_field(name="🏆 Point Value", value=f"{CATEGORY_POINTS[category]} points", inline=True)
-            
-            if opening_points > 0:
-                success_embed.add_field(name="💰 Opening Bonus", value=f"+{opening_points} points awarded!", inline=True)
             
             await interaction.followup.send(embed=success_embed, ephemeral=True)
 

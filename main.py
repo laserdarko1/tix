@@ -39,9 +39,6 @@ class TicketBot(commands.Bot):
             await self.load_extension("modules.points.points_extra")
             logger.info("✅ Points extra loaded")
             
-            await self.load_extension("modules.points.ticket_statistics")
-            logger.info("✅ Ticket statistics loaded")
-            
             # Load Setup System
             await self.load_extension("modules.setup.setup_commands")
             logger.info("✅ Setup commands loaded")

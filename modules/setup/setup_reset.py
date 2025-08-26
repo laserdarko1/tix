@@ -22,8 +22,7 @@ class SetupResetCog(commands.Cog):
                                           blocked_role_id=None,
                                           reward_role_id=None,
                                           ticket_category_id=None,
-                                          transcript_channel_id=None,
-                                          opening_points=0)
+                                          transcript_channel_id=None)
             
             embed = discord.Embed(
                 title="✅ Setup Reset Complete",
@@ -32,7 +31,7 @@ class SetupResetCog(commands.Cog):
             )
             embed.add_field(
                 name="🔄 What was reset:",
-                value="• All role configurations\n• All channel configurations\n• Server settings\n• Opening points system",
+                value="• All role configurations\n• All channel configurations\n• Server settings",
                 inline=False
             )
             embed.add_field(

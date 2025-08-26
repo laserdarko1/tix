@@ -5,6 +5,7 @@ This is a Discord bot designed for game assistance servers, specifically focused
 # User Preferences
 
 Preferred communication style: Simple, everyday language.
+Code preferences: Keep original code intact, restore to original functionality when requested.
 
 # System Architecture
 
@@ -26,7 +27,7 @@ Preferred communication style: Simple, everyday language.
 
 **Multi-Guild Support**: All database tables include guild_id to support multiple Discord servers with isolated configurations and data.
 
-**Points System**: Tracks user points per guild with different point values for various ticket categories. Supports both earning points through helping and optional opening points for ticket creation.
+**Points System**: Tracks user points per guild with different point values for various ticket categories.
 
 **Role-Based Permissions**: Configurable role system with admin, staff, helper, viewer, blocked, and reward roles that control access to different bot features.
 
@@ -51,3 +52,7 @@ Preferred communication style: Simple, everyday language.
 **Environment Configuration**: Uses python-dotenv for secure configuration management, particularly for the Discord bot token and database path settings.
 
 **Logging System**: Built-in Python logging for debugging and monitoring bot operations across all modules.
+
+# Recent Changes
+
+August 26, 2025: User requested restoration of original code without modifications. All enhancements and changes have been removed and the bot has been restored to its original functionality.

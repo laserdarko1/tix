@@ -9,79 +9,67 @@ class PointsExtraCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="pointsinfo", description="Learn about the points system")
-    async def points_info(self, interaction: discord.Interaction):
-        """Show information about the points system"""
+    @app_commands.command(name="mypoints", description="Check your own points")
+    async def mypoints(self, interaction: discord.Interaction):
+        """Show your own points"""
         try:
-            # Get server configuration for opening points
-            config = await db.get_server_config(interaction.guild.id)
-            opening_points = config.get("opening_points", 0) if config else 0
+            points = await db.get_user_points(interaction.guild.id, interaction.user.id)
             
             embed = discord.Embed(
-                title="🏆 Points System Information",
-                description="Learn how to earn points and climb the leaderboard!",
-                color=discord.Color.gold()
+                title="💰 Your Points",
+                description=f"You have **{points}** points.",
+                color=discord.Color.blue()
             )
+            embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else interaction.user.default_avatar.url)
             
-            # How to earn points
-            earning_text = (
-                "🙋 **Helping Others:**\n"
-                "Join tickets and help other players complete their goals. "
-                "You earn points when the ticket is successfully closed.\n\n"
-            )
-            
-            if opening_points > 0:
-                earning_text += f"🎫 **Opening Tickets:**\n"
-                earning_text += f"Earn {opening_points} points just for opening a ticket!\n\n"
-            
-            earning_text += (
-                "📈 **Point Values per Ticket:**\n"
-                "Different ticket types award different point amounts based on difficulty."
-            )
-            
-            embed.add_field(name="💰 How to Earn Points", value=earning_text, inline=False)
-            
-            # Point values
-            values_text = (
-                "🏆 Ultra Speaker Express: **8 points**\n"
-                "🏆 Ultra Gramiel Express: **7 points**\n" 
-                "🏆 4-Man Ultra Daily Express: **4 points**\n"
-                "🏆 7-Man Ultra Daily Express: **7 points**\n"
-                "🏆 Ultra Weekly Express: **12 points**\n"
-                "🏆 Grim Express: **10 points**\n"
-                "🏆 Daily Temple Express: **6 points**"
-            )
-            embed.add_field(name="📊 Point Values", value=values_text, inline=False)
-            
-            # Tips for success
-            tips_text = (
-                "• Join tickets that match your skill level\n"
-                "• Be reliable and complete tickets you join\n"
-                "• Help new players learn the content\n"
-                "• Use `/leaderboard` to see top helpers\n"
-                "• Check `/myrank` to track your progress"
-            )
-            
-            if opening_points > 0:
-                tips_text += f"\n• Create tickets when you need help (earn {opening_points} points!)"
-            
-            embed.add_field(name="💡 Tips for Success", value=tips_text, inline=False)
-            
-            # Commands
-            commands_text = (
-                "`/mypoints` - Check your current points\n"
-                "`/points @user` - Check anyone's points\n"
-                "`/leaderboard` - View top helpers\n"
-                "`/myrank` - See your rank position"
-            )
-            embed.add_field(name="📋 Related Commands", value=commands_text, inline=False)
-            
-            embed.set_footer(text="Points are server-specific and reset only by administrators")
-            embed.timestamp = discord.utils.utcnow()
+            if points == 0:
+                embed.add_field(
+                    name="💡 How to earn points", 
+                    value="Help others with their tickets to earn points!", 
+                    inline=False
+                )
             
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error displaying points info: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
+    @app_commands.command(name="pointsinfo", description="Learn about the points system")
+    async def pointsinfo(self, interaction: discord.Interaction):
+        """Explain the points system"""
+        embed = discord.Embed(
+            title="💠 Points System Information",
+            description="Learn how the points system works in this server!",
+            color=discord.Color.purple()
+        )
+        
+        embed.add_field(
+            name="🎯 How to Earn Points",
+            value="• Join tickets as a helper\n• Complete assistance successfully\n• Points are awarded when tickets close",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📊 Tracking Your Progress", 
+            value="• Use `/mypoints` to see your points\n• Use `/myrank` to see your leaderboard position\n• Use `/leaderboard` to see top helpers",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🏆 Point Values",
+            value="Different ticket types award different points:\n• Ultra Speaker Express: 8 pts\n• Ultra Gramiel Express: 7 pts\n• 4-Man Ultra Daily: 4 pts\n• 7-Man Ultra Daily: 7 pts\n• Ultra Weekly Express: 12 pts\n• Grim Express: 10 pts\n• Daily Temple Express: 6 pts",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="⚡ Admin Commands",
+            value="Administrators can:\n• Add/remove/set points manually\n• Remove users from leaderboard\n• Reset the entire leaderboard",
+            inline=False
+        )
+        
+        embed.set_footer(text="Start helping today to climb the leaderboard!")
+        
+        await interaction.response.send_message(embed=embed)
+
+# -------------------- LOAD COG --------------------
 async def setup(bot):
     await bot.add_cog(PointsExtraCog(bot))

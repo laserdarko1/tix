@@ -23,7 +23,7 @@ class DatabaseManager:
                 )
             ''')
             
-            # Server configuration table - updated with opening_points
+            # Server configuration table
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS server_config (
                     guild_id INTEGER PRIMARY KEY,
@@ -34,17 +34,9 @@ class DatabaseManager:
                     blocked_role_id INTEGER,
                     reward_role_id INTEGER,
                     ticket_category_id INTEGER,
-                    transcript_channel_id INTEGER,
-                    opening_points INTEGER DEFAULT 0
+                    transcript_channel_id INTEGER
                 )
             ''')
-            
-            # Add opening_points column if it doesn't exist (for existing databases)
-            try:
-                await db.execute('ALTER TABLE server_config ADD COLUMN opening_points INTEGER DEFAULT 0')
-                await db.commit()
-            except:
-                pass  # Column already exists
             
             # Custom commands table
             await db.execute('''
@@ -57,7 +49,7 @@ class DatabaseManager:
                 )
             ''')
             
-            # Active tickets table - updated with reward status
+            # Active tickets table
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS active_tickets (
                     guild_id INTEGER,
@@ -66,17 +58,9 @@ class DatabaseManager:
                     category TEXT,
                     ticket_number INTEGER,
                     helpers TEXT,
-                    rewarded INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # Add rewarded column if it doesn't exist (for existing databases)
-            try:
-                await db.execute('ALTER TABLE active_tickets ADD COLUMN rewarded INTEGER DEFAULT 0')
-                await db.commit()
-            except:
-                pass  # Column already exists
             
             # Ticket counter table
             await db.execute('''
@@ -84,16 +68,6 @@ class DatabaseManager:
                     guild_id INTEGER,
                     category TEXT,
                     counter INTEGER DEFAULT 0,
-                    PRIMARY KEY (guild_id, category)
-                )
-            ''')
-            
-            # Ticket statistics table - NEW for tracking total tickets
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS ticket_stats (
-                    guild_id INTEGER,
-                    category TEXT,
-                    total_opened INTEGER DEFAULT 0,
                     PRIMARY KEY (guild_id, category)
                 )
             ''')
@@ -210,71 +184,34 @@ class DatabaseManager:
             await db.commit()
 
     # ==================== TICKET METHODS ====================
-    async def get_active_tickets_count(self, guild_id: int, category: str = None) -> int:
-        """Get count of active tickets for a category or all categories"""
-        async with aiosqlite.connect(self.db_path) as db:
-            if category:
-                async with db.execute(
-                    'SELECT COUNT(*) FROM active_tickets WHERE guild_id = ? AND category = ?',
-                    (guild_id, category)
-                ) as cursor:
-                    result = await cursor.fetchone()
-                    return result[0] if result else 0
-            else:
-                async with db.execute(
-                    'SELECT COUNT(*) FROM active_tickets WHERE guild_id = ?',
-                    (guild_id,)
-                ) as cursor:
-                    result = await cursor.fetchone()
-                    return result[0] if result else 0
-
     async def get_next_ticket_number(self, guild_id: int, category: str) -> int:
-        """Get next ticket number for a category - resets to 1 if no active tickets"""
+        """Get next ticket number for a category"""
         async with aiosqlite.connect(self.db_path) as db:
-            # Check if there are any active tickets for this category
-            active_count = await self.get_active_tickets_count(guild_id, category)
+            # Get current counter
+            async with db.execute(
+                'SELECT counter FROM ticket_counters WHERE guild_id = ? AND category = ?',
+                (guild_id, category)
+            ) as cursor:
+                result = await cursor.fetchone()
+                current = result[0] if result else 0
             
-            if active_count == 0:
-                # Reset counter to 1 if no active tickets
-                await db.execute('''
-                    INSERT OR REPLACE INTO ticket_counters (guild_id, category, counter)
-                    VALUES (?, ?, ?)
-                ''', (guild_id, category, 1))
-                await db.commit()
-                return 1
-            else:
-                # Get current counter and increment
-                async with db.execute(
-                    'SELECT counter FROM ticket_counters WHERE guild_id = ? AND category = ?',
-                    (guild_id, category)
-                ) as cursor:
-                    result = await cursor.fetchone()
-                    current = result[0] if result else 0
-                
-                # Increment counter
-                new_counter = current + 1
-                await db.execute('''
-                    INSERT OR REPLACE INTO ticket_counters (guild_id, category, counter)
-                    VALUES (?, ?, ?)
-                ''', (guild_id, category, new_counter))
-                await db.commit()
-                
-                return new_counter
+            # Increment counter
+            new_counter = current + 1
+            await db.execute('''
+                INSERT OR REPLACE INTO ticket_counters (guild_id, category, counter)
+                VALUES (?, ?, ?)
+            ''', (guild_id, category, new_counter))
+            await db.commit()
+            
+            return new_counter
 
     async def save_active_ticket(self, guild_id: int, channel_id: int, owner_id: int, category: str, ticket_number: int):
         """Save active ticket information"""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
-                INSERT INTO active_tickets (guild_id, channel_id, owner_id, category, ticket_number, helpers, rewarded)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (guild_id, channel_id, owner_id, category, ticket_number, "", 0))
-            await db.commit()
-            
-            # Update ticket statistics
-            await db.execute('''
-                INSERT OR REPLACE INTO ticket_stats (guild_id, category, total_opened)
-                VALUES (?, ?, COALESCE((SELECT total_opened FROM ticket_stats WHERE guild_id = ? AND category = ?), 0) + 1)
-            ''', (guild_id, category, guild_id, category))
+                INSERT INTO active_tickets (guild_id, channel_id, owner_id, category, ticket_number, helpers)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (guild_id, channel_id, owner_id, category, ticket_number, ""))
             await db.commit()
 
     async def update_ticket_helpers(self, guild_id: int, channel_id: int, helper_ids: list):
@@ -284,15 +221,6 @@ class DatabaseManager:
             await db.execute(
                 'UPDATE active_tickets SET helpers = ? WHERE guild_id = ? AND channel_id = ?',
                 (helpers_str, guild_id, channel_id)
-            )
-            await db.commit()
-
-    async def set_ticket_rewarded(self, guild_id: int, channel_id: int, rewarded: bool = True):
-        """Mark ticket as rewarded or not"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                'UPDATE active_tickets SET rewarded = ? WHERE guild_id = ? AND channel_id = ?',
-                (1 if rewarded else 0, guild_id, channel_id)
             )
             await db.commit()
 
@@ -317,34 +245,3 @@ class DatabaseManager:
                 (guild_id, channel_id)
             )
             await db.commit()
-
-    async def get_ticket_stats(self, guild_id: int) -> dict:
-        """Get ticket statistics for all categories"""
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                'SELECT category, total_opened FROM ticket_stats WHERE guild_id = ?',
-                (guild_id,)
-            ) as cursor:
-                results = await cursor.fetchall()
-                return {category: total for category, total in results}
-
-    async def get_active_tickets(self, guild_id: int) -> list:
-        """Get all active tickets for a guild"""
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                'SELECT * FROM active_tickets WHERE guild_id = ?',
-                (guild_id,)
-            ) as cursor:
-                results = await cursor.fetchall()
-                columns = [desc[0] for desc in cursor.description]
-                return [dict(zip(columns, row)) for row in results]
-
-    async def get_ticket_counters(self, guild_id: int) -> dict:
-        """Get all ticket counters for a guild"""
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute(
-                'SELECT category, counter FROM ticket_counters WHERE guild_id = ?',
-                (guild_id,)
-            ) as cursor:
-                results = await cursor.fetchall()
-                return {category: counter for category, counter in results}

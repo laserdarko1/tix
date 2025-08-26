@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
+from discord import app_commands, Embed
 from database import DatabaseManager
 
 db = DatabaseManager()
@@ -9,84 +9,85 @@ class CustomCommandsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="rrules", description="Show rules for ticket requesters")
+    @app_commands.command(name="rrules", description="Display rules for runners/requesters")
     async def rrules(self, interaction: discord.Interaction):
-        """Show runner/requester rules"""
+        """Display custom rules for runners"""
         try:
             command_data = await db.get_custom_command(interaction.guild.id, "rrules")
-            
             if not command_data:
-                embed = discord.Embed(
-                    title="📜 Runner Rules",
-                    description="This command has not been configured yet. An administrator needs to use `/setupcommands` to set up this command.",
-                    color=discord.Color.orange()
+                embed = Embed(
+                    title="❌ Not Configured",
+                    description="Runner rules have not been configured yet. An administrator needs to use `/setup` to configure custom commands.",
+                    color=discord.Color.red()
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            embed = discord.Embed(
+            embed = Embed(
                 title="📜 Runner Rules",
                 description=command_data['content'],
                 color=discord.Color.blue()
             )
+            embed.set_footer(text="Please follow these rules when creating tickets")
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error displaying rules: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="hrules", description="Show rules for helpers")
+    @app_commands.command(name="hrules", description="Display rules for helpers")
     async def hrules(self, interaction: discord.Interaction):
-        """Show helper rules"""
+        """Display custom rules for helpers"""
         try:
             command_data = await db.get_custom_command(interaction.guild.id, "hrules")
-            
             if not command_data:
-                embed = discord.Embed(
-                    title="📋 Helper Rules",
-                    description="This command has not been configured yet. An administrator needs to use `/setupcommands` to set up this command.",
-                    color=discord.Color.orange()
+                embed = Embed(
+                    title="❌ Not Configured",
+                    description="Helper rules have not been configured yet. An administrator needs to use `/setup` to configure custom commands.",
+                    color=discord.Color.red()
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            embed = discord.Embed(
+            embed = Embed(
                 title="📋 Helper Rules",
                 description=command_data['content'],
                 color=discord.Color.green()
             )
+            embed.set_footer(text="Please follow these rules when helping with tickets")
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error displaying rules: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="proof", description="Show proof submission guidelines")
+    @app_commands.command(name="proof", description="Display proof submission instructions")
     async def proof(self, interaction: discord.Interaction):
-        """Show proof submission guidelines"""
+        """Display proof submission instructions"""
         try:
             command_data = await db.get_custom_command(interaction.guild.id, "proof")
-            
             if not command_data:
-                embed = discord.Embed(
-                    title="📸 Proof Instructions",
-                    description="This command has not been configured yet. An administrator needs to use `/setupcommands` to set up this command.",
-                    color=discord.Color.orange()
+                embed = Embed(
+                    title="❌ Not Configured",
+                    description="Proof instructions have not been configured yet. An administrator needs to use `/setup` to configure custom commands.",
+                    color=discord.Color.red()
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            embed = discord.Embed(
-                title="📸 Proof Instructions",
+            embed = Embed(
+                title="📸 Proof Submission",
                 description=command_data['content'],
-                color=discord.Color.purple()
+                color=discord.Color.gold()
             )
             
-            # Add image if provided
-            if command_data['image_url']:
+            if command_data.get('image_url'):
                 embed.set_image(url=command_data['image_url'])
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed.set_footer(text="Follow these guidelines for proof submission")
+            
+            await interaction.response.send_message(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error displaying proof instructions: {str(e)}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {str(e)}", ephemeral=True)
 
+# -------------------- LOAD COG --------------------
 async def setup(bot):
     await bot.add_cog(CustomCommandsCog(bot))
